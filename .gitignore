@@ -1,0 +1,23 @@
+# Daten und Outputs — nicht ins Repo
+data/
+outputs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.Python
+
+# Notebooks Checkpoints
+.ipynb_checkpoints/
+
+# Logs
+*.log
+
+# Environment
+.env
+.venv/
+venv/
