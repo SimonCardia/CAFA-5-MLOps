@@ -1,4 +1,4 @@
-# Daten und Outputs — nicht ins Repo
+# Data files
 data/
 outputs/
 
@@ -9,15 +9,25 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-.Python
+.eggs/
 
-# Notebooks Checkpoints
+# Jupyter
 .ipynb_checkpoints/
 
-# Logs
-*.log
+# Precomputed arrays
+*.npy
 
 # Environment
 .env
 .venv/
 venv/
+env/
+.cafa5/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db

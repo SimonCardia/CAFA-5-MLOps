@@ -1,10 +1,5 @@
-"""Build a binary label matrix from raw train_terms.tsv.
+"""Build binary label matrix from train_terms.tsv for the top-N GO terms."""
 
-Reconstructed from notebook logic and script imports.
-Called by:
-  - scripts/preprocess.py  (standalone)
-  - scripts/train.py       (on-the-fly if matrix not present)
-"""
 from __future__ import annotations
 
 import logging
@@ -18,65 +13,55 @@ from src.config import Config
 logger = logging.getLogger("cafa5")
 
 
-def build_label_matrix(
-    config: Config,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Read train_terms.tsv and build a binary label matrix.
-
-    Steps:
-      1. Load all (EntryID, term) pairs from train_terms.tsv.
-      2. Select the top-N most frequent GO terms.
-      3. Build a binary matrix  [n_proteins × num_labels].
+def build_label_matrix(config: Config) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Read train_terms.tsv, select top-N GO terms, and construct a binary label matrix.
 
     Returns:
-        label_matrix : np.ndarray, shape (n_proteins, num_labels), dtype float32
-        protein_ids  : np.ndarray of EntryID strings, shape (n_proteins,)
-        term_names   : np.ndarray of GO-term strings,  shape (num_labels,)
+        Tuple of (label_matrix, protein_ids, term_names) where
+        - label_matrix: shape (n_proteins, num_labels), dtype float32
+        - protein_ids:  1-D array of EntryID strings
+        - term_names:   1-D array of GO-term strings
     """
+    num_labels = config.num_labels
     data_dir = Path(config.data.get("data_dir", "data/cafa-5-protein-function-prediction"))
     labels_path = data_dir / "Train" / "train_terms.tsv"
 
     if not labels_path.exists():
         raise FileNotFoundError(f"train_terms.tsv not found at {labels_path}")
 
-    logger.info("Loading labels from %s", labels_path)
-    df = pd.read_csv(labels_path, sep="\t")  # columns: EntryID, term, aspect
+    logger.info("Reading %s", labels_path)
+    df = pd.read_csv(labels_path, sep="\t")
 
-    # ── Top-N GO terms ────────────────────────────────────────────────────────
-    num_labels = config.num_labels
-    top_terms: np.ndarray = (
+    top_terms = (
         df.groupby("term")["EntryID"]
         .count()
         .sort_values(ascending=False)
         .head(num_labels)
-        .index.values
     )
-    logger.info("Selected top %d GO terms", len(top_terms))
+    term_names: np.ndarray = top_terms.index.values
 
-    # ── Protein list (preserves order) ────────────────────────────────────────
-    protein_ids: np.ndarray = df["EntryID"].unique()
-    n_proteins = len(protein_ids)
-    protein_index = {pid: i for i, pid in enumerate(protein_ids)}
-    term_index = {term: j for j, term in enumerate(top_terms)}
+    df_filtered = df[df["term"].isin(term_names)]
+    protein_ids = df_filtered["EntryID"].unique()
+    protein_ids.sort()
 
-    # ── Binary matrix ─────────────────────────────────────────────────────────
-    label_matrix = np.zeros((n_proteins, num_labels), dtype=np.float32)
+    pid_to_idx = {pid: i for i, pid in enumerate(protein_ids)}
+    term_to_idx = {t: i for i, t in enumerate(term_names)}
 
-    df_filtered = df[df["term"].isin(term_index)]
-    for _, row in df_filtered.iterrows():
-        i = protein_index[row["EntryID"]]
-        j = term_index[row["term"]]
-        label_matrix[i, j] = 1.0
+    label_matrix = np.zeros((len(protein_ids), num_labels), dtype=np.float32) # [row:n_proteins, column:num_labels]
 
-    sparsity = 1.0 - label_matrix.mean()
+    # creates a multi-hot encoding matrix where each row corresponds to a protein and each column corresponds to a GO term. 
+    # A value of 1 indicates that the protein is annotated with that GO term, while 0 indicates no annotation.
+    for _, row in df_filtered.iterrows(): 
+        pid = row["EntryID"]
+        term = row["term"]
+        if pid in pid_to_idx and term in term_to_idx:
+            label_matrix[pid_to_idx[pid], term_to_idx[term]] = 1.0
+
     logger.info(
-        "Label matrix built: %s proteins × %s terms  (sparsity %.1f%%)",
-        n_proteins,
-        num_labels,
-        sparsity * 100,
+        "Built label matrix: %d proteins x %d GO terms", len(protein_ids), num_labels
     )
 
-    return label_matrix, protein_ids, top_terms
+    return label_matrix, protein_ids, term_names
 
 
 def save_label_matrix(
@@ -85,16 +70,10 @@ def save_label_matrix(
     protein_ids: np.ndarray,
     term_names: np.ndarray,
 ) -> Path:
-    """Persist label matrix and metadata to disk.
-
-    Saves three .npy files under:
-        <output_dir>/label_matrix_top<num_labels>/
-            label_matrix.npy   – float32 binary matrix
-            protein_ids.npy    – EntryID strings
-            term_names.npy     – GO-term strings
+    """Persist the label matrix, protein IDs, and term names as .npy files.
 
     Returns:
-        Path to the output directory.
+        The directory where files were saved.
     """
     out_dir = config.output_dir / f"label_matrix_top{config.num_labels}"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -103,5 +82,5 @@ def save_label_matrix(
     np.save(out_dir / "protein_ids.npy", protein_ids)
     np.save(out_dir / "term_names.npy", term_names)
 
-    logger.info("Label matrix saved → %s", out_dir)
+    logger.info("Saved label matrix artefacts to %s", out_dir)
     return out_dir

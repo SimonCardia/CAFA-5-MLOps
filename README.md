@@ -1,152 +1,149 @@
-# CAFA-5 Protein Function Prediction — MLOps Pipeline
+# CAFA-5 Protein Function Prediction
 
-A production-ready MLOps pipeline for the [Kaggle CAFA-5 competition](https://www.kaggle.com/competitions/cafa-5-protein-function-prediction), predicting Gene Ontology (GO) terms from protein language model embeddings (ESM-2, ProtBERT, T5).
-
-## Project Objectives
-
-| Objective | Metric | Target |
-|---|---|---|
-| Predict GO terms per protein | F1-Score (micro) | > 0.10 baseline |
-| Multi-label classification | Val F1 | Best checkpoint saved |
-| Reproducible pipeline | Seeded splits | seed=42 |
-
-## Architecture
-
-```
-data/embeddings/          data/cafa-5-.../Train/
-       │                          │
-       ▼                          ▼
-  preprocess ──────────► label_matrix_top500/
-       │
-       ▼
-    train ──────────────► outputs/checkpoints/best_model.pt
-       │
-       ▼
-   predict ─────────────► outputs/submission.tsv
-       │
-       ▼
-  inference API ──────────► http://localhost:8000
-```
+Production-ready ML pipeline for the [Kaggle CAFA-5 Protein Function Prediction competition](https://www.kaggle.com/competitions/cafa-5-protein-function-prediction), predicting Gene Ontology (GO) terms from protein language model embeddings (ESM-2, ProtBERT, T5).
 
 ## Project Structure
 
 ```
-CAFA-5-MLOps/
+CAFA-5-Protein-Function-Prediction-MLOps/
 ├── configs/
-│   └── config.yaml              # All hyperparameters and paths
-├── docker/
-│   ├── Dockerfile.amd           # AMD ROCm (RX 9060 XT, gfx1200)
-│   ├── Dockerfile.nvidia        # NVIDIA CUDA
-│   ├── Dockerfile.cpu           # CPU-only fallback
-│   └── Dockerfile.api           # Lightweight inference API
-├── scripts/
-│   ├── preprocess.py            # Build binary label matrix
-│   ├── train.py                 # Train model
-│   └── predict.py               # Generate submission.tsv
+│   └── config.yaml                # All hyperparams, paths, model selection
 ├── src/
-│   ├── api/
-│   │   └── app.py               # FastAPI inference API
-│   ├── data/
-│   │   ├── dataset.py           # PyTorch Dataset
-│   │   └── preprocessing.py    # Label matrix builder
-│   ├── inference/
-│   │   └── predictor.py        # Load checkpoint + predict
+│   ├── __init__.py
+│   ├── config.py                  # YAML config loading + dataclass validation
+│   ├── preprocess/
+│   │   ├── __init__.py
+│   │   ├── dataset.py             # ProteinSequenceDataset (PyTorch Dataset)
+│   │   └── preprocessing.py       # Build binary label matrix from train_terms.tsv
 │   ├── models/
-│   │   ├── mlp.py               # MultiLayerPerceptron
-│   │   └── cnn1d.py             # 1D Convolutional Network
+│   │   ├── __init__.py            # Factory function build_model()
+│   │   ├── mlp.py                 # MultiLayerPerceptron
+│   │   └── cnn1d.py               # CNN1D
 │   ├── training/
-│   │   └── trainer.py           # Training loop + checkpointing
-│   ├── config.py                # YAML config loader
-│   └── utils.py                 # Seed, device, logger
-├── docker-compose.yml
+│   │   ├── __init__.py
+│   │   └── trainer.py             # Training loop, validation, checkpointing
+│   ├── inference/
+│   │   ├── __init__.py
+│   │   └── predictor.py           # Load model + generate submission
+│   └── utils.py                   # Seed setting, logging setup, device selection
+├── scripts/
+│   ├── train.py                   # CLI: python scripts/train.py --config configs/config.yaml
+│   ├── predict.py                 # CLI: python scripts/predict.py --config configs/config.yaml
+│   └── preprocess.py              # CLI: generate label matrix from raw data
+├── data/                          # .gitignored; user places data here
+├── outputs/                       # .gitignored; checkpoints, logs, submissions
+├── notebooks/
+│   └── CAFA5-EMS2embeds-Pytorch.ipynb   # Archived original notebook
 ├── requirements.txt
-└── pyproject.toml
+├── pyproject.toml
+├── .gitignore
+└── README.md
 ```
 
-## Quick Start
+## Background
 
-### Prerequisites
-- Docker + Docker Compose
-- AMD GPU (ROCm) / NVIDIA GPU (CUDA) / CPU
+The Gene Ontology (GO) is a concept hierarchy describing biological function of genes and gene products at different levels of abstraction. This project frames GO term prediction as a **multi-label classification** problem: given a protein embedding, predict which of the top-N GO terms apply.
 
-### 1. Clone and prepare data
+## Setup
+
+### 1. Create environment
 
 ```bash
-git clone https://github.com/SimonCardia/CAFA-5-MLOps.git
-cd CAFA-5-MLOps
-mkdir -p data/embeddings/esm2 data/cafa-5-protein-function-prediction outputs
-
-# Download from Kaggle
-kaggle datasets download viktorfairuschin/cafa-5-ems-2-embeddings-numpy \
-  --unzip -p data/embeddings/esm2/
-kaggle datasets download siddhvr/train-targets-top500 \
-  --unzip -p outputs/label_matrix_top500/
-# Place train_terms.tsv in data/cafa-5-protein-function-prediction/Train/
+python -m venv .venv
+source .venv/bin/activate   # Linux/macOS
+pip install -r requirements.txt
 ```
 
-### 2. Build and run
+### 2. Place data
+
+Download data from the [Kaggle competition page](https://www.kaggle.com/competitions/cafa-5-protein-function-prediction/data) and embedding datasets : 
+- EMS2 : [cafa-5-ems-2-embeddings-numpy](https://www.kaggle.com/datasets/viktorfairuschin/cafa-5-ems-2-embeddings-numpy)
+- ProtBERT: [protbert-embeddings-for-cafa5](https://www.kaggle.com/datasets/henriupton/protbert-embeddings-for-cafa5)
+- T5Embeds: [t5embeds](https://www.kaggle.com/datasets/kriukov/t5embeds)
+
+Then organize under `data/`:
+
+```
+data/
+├── cafa-5-protein-function-prediction/
+│   └── Train/
+│       ├── train_terms.tsv
+│       ├── train_sequences.fasta
+│       └── ...
+├── cafa-5-ems-2-embeddings-numpy/
+│   ├── train_embeddings.npy
+│   ├── train_ids.npy
+│   ├── test_embeddings.npy
+│   └── test_ids.npy
+└── ...
+```
+
+### 3. Configure
+
+Edit `configs/config.yaml` to adjust paths, model type, hyperparameters, and embedding source.
+
+## Usage
+
+### Preprocess labels
 
 ```bash
-# AMD GPU
-docker compose --profile amd build
-docker compose --profile amd up
-
-# NVIDIA GPU
-docker compose --profile nvidia build
-docker compose --profile nvidia up
-
-# CPU only
-docker compose --profile cpu build
-docker compose --profile cpu up
+python scripts/preprocess.py --config configs/config.yaml
 ```
 
-### 3. Start inference API
+Generates a binary label matrix (`.npy`) under `outputs/`.
+
+### Train
 
 ```bash
-docker compose --profile amd build api
-docker compose --profile amd up api
-# API available at http://localhost:8000
-# Swagger docs at http://localhost:8000/docs
+python scripts/train.py --config configs/config.yaml
 ```
 
-## Models
+Trains the model, saves the best checkpoint (by val F1) to `outputs/checkpoints/best_model.pt`, and writes `outputs/training_history.json`.
 
-| Model | Params | Description |
-|---|---|---|
-| `cnn1d` | 2.6M | Two 1D conv layers + max pooling + FC |
-| `mlp` | ~1.2M | Three fully-connected layers with ReLU |
+### Predict
 
-Both output raw logits — `BCEWithLogitsLoss` applies sigmoid internally.
+```bash
+python scripts/predict.py --config configs/config.yaml [--checkpoint path/to/model.pt]
+```
 
-## Results (Baseline)
-
-| Epoch | Train F1 | Val F1 |
-|---|---|---|
-| 1 | 0.019 | 0.047 |
-| 2 | 0.069 | 0.079 |
-| 3 | 0.097 | 0.108 |
-| 4 | 0.117 | 0.117 |
-| 5 | 0.137 | **0.129** |
-
-Model: CNN1D, Embeddings: ESM2, 5 epochs, AMD RX 9060 XT
+Produces `outputs/submission.tsv` in CAFA-5 format (Id, GO term, Confidence).
 
 ## Configuration
 
-All parameters in `configs/config.yaml`:
+All parameters live in `configs/config.yaml`:
 
 ```yaml
 data:
-  embeddings_source: "ESM2"   # ESM2 | ProtBERT | T5
+  data_dir: "data/cafa-5-protein-function-prediction"
+  embeddings_dir: "data"
+  embeddings_source: "ESM2"        # ESM2 | ProtBERT | T5
   num_labels: 500
   train_val_split: 0.9
+
 model:
-  type: "cnn1d"               # mlp | cnn1d
+  type: "mlp"                      # mlp | cnn1d
+  mlp_hidden_dims: [864, 712]
+  cnn_out_channels: [3, 8]
+  cnn_kernel_size: 3
+
 training:
   epochs: 5
   batch_size: 128
   learning_rate: 0.001
+  scheduler_factor: 0.1
+  scheduler_patience: 1
   seed: 42
+
+output:
+  output_dir: "outputs"
 ```
+
+## Models
+
+- **MLP** (`mlp`): Configurable hidden-layer sizes, ReLU activations.
+- **CNN1D** (`cnn1d`): Two 1-D conv layers with tanh activations, max pooling, and fully-connected output.
+
+Both output raw logits (no final sigmoid) — `BCEWithLogitsLoss` handles the sigmoid internally for numerical stability.
 
 ## License
 

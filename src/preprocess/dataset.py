@@ -1,15 +1,12 @@
-"""PyTorch Dataset for protein sequence embeddings.
+"""PyTorch Dataset for protein embeddings + GO-term labels."""
 
-Reconstructed from the original notebook (ProteinSequenceDataset class)
-and adapted to work with the Config dataclass and the saved label matrix.
-"""
 from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Union
 
 import numpy as np
-import pandas as pd
 import torch
 from torch.utils.data import Dataset
 
@@ -17,106 +14,115 @@ from src.config import Config
 
 logger = logging.getLogger("cafa5")
 
-# Embedding file naming conventions per source
-_EMBED_FILES = {
-    "esm2":     ("train_embeddings.npy", "train_ids.npy",
-                 "test_embeddings.npy",  "test_ids.npy"),
-    "protbert": ("train_embeddings.npy", "train_ids.npy",
-                 "test_embeddings.npy",  "test_ids.npy"),
-    "t5":       ("train_embeds.npy",     "train_ids.npy",
-                 "test_embeds.npy",      "test_ids.npy"),
+EMBED_FILE_MAP: dict[str, dict[str, str]] = {
+    "esm2": {
+        "dir": "cafa-5-ems-2-embeddings-numpy",
+        "train_embeds": "train_embeddings.npy",
+        "train_ids": "train_ids.npy",
+        "test_embeds": "test_embeddings.npy",
+        "test_ids": "test_ids.npy",
+    },
+    "protbert": {
+        "dir": "protbert-embeddings-for-cafa5",
+        "train_embeds": "train_embeddings.npy",
+        "train_ids": "train_ids.npy",
+        "test_embeds": "test_embeddings.npy",
+        "test_ids": "test_ids.npy",
+    },
+    "t5": {
+        "dir": "t5embeds",
+        "train_embeds": "train_embeds.npy",
+        "train_ids": "train_ids.npy",
+        "test_embeds": "test_embeds.npy",
+        "test_ids": "test_ids.npy",
+    },
 }
 
 
 class ProteinSequenceDataset(Dataset):
-    """Dataset that pairs protein embeddings with GO-term label vectors.
+    """Dataset yielding (embedding, label) for training or (embedding, protein_id) for test.
+
+    Loads numpy arrays directly into tensors — no intermediate DataFrame.
 
     Args:
-        config:            Project configuration.
-        datatype:          ``"train"`` or ``"test"``.
-        label_matrix_dir:  Directory containing ``label_matrix.npy``,
-                           ``protein_ids.npy``, ``term_names.npy``.
-                           Required when ``datatype="train"``.
+        config: Project configuration.
+        datatype: ``"train"`` or ``"test"``.
+        label_matrix_dir: Directory containing precomputed label_matrix.npy / protein_ids.npy.
+                          Required when ``datatype="train"``.
     """
 
     def __init__(
         self,
         config: Config,
-        datatype: str = "train",
-        label_matrix_dir: Path | None = None,
+        datatype: str,
+        label_matrix_dir: Union[str, Path, None] = None,
     ) -> None:
         super().__init__()
-
         if datatype not in ("train", "test"):
             raise ValueError(f"datatype must be 'train' or 'test', got '{datatype}'")
 
         self.datatype = datatype
         source = config.data.get("embeddings_source", "ESM2").lower()
+        embeds_dir = Path(config.data.get("embeddings_dir", "data"))
 
-        if source not in _EMBED_FILES:
+        file_info = EMBED_FILE_MAP.get(source)
+        if file_info is None:
             raise ValueError(f"Unknown embeddings_source '{source}'")
 
-        embed_file, id_file, test_embed_file, test_id_file = _EMBED_FILES[source]
-        embeds_dir = Path(config.data.get("embeddings_dir", "data/embeddings")) / source
+        embed_subdir = embeds_dir / file_info["dir"]
+        embed_file = file_info[f"{datatype}_embeds"]
+        ids_file = file_info[f"{datatype}_ids"]
 
-        # ── Load embeddings ───────────────────────────────────────────────────
-        if datatype == "train":
-            embed_path = embeds_dir / embed_file
-            id_path    = embeds_dir / id_file
-        else:
-            embed_path = embeds_dir / test_embed_file
-            id_path    = embeds_dir / test_id_file
+        logger.info("Loading %s embeddings from %s", datatype, embed_subdir)
+        self.embeddings = torch.from_numpy(
+            np.load(embed_subdir / embed_file)
+        ).float()
+        self.ids: np.ndarray = np.load(embed_subdir / ids_file, allow_pickle=True)
 
-        logger.info("Loading %s embeddings from %s", datatype, embed_path)
-        embeds = np.load(embed_path)          # (n_proteins, embed_dim)
-        ids    = np.load(id_path, allow_pickle=True)
-
-        self.df = pd.DataFrame({
-            "EntryID": ids,
-            "embed":   list(embeds),
-        })
-
-        # ── Load labels (train only) ──────────────────────────────────────────
+        self.labels: torch.Tensor | None = None
         if datatype == "train":
             if label_matrix_dir is None:
                 label_matrix_dir = (
                     config.output_dir / f"label_matrix_top{config.num_labels}"
                 )
             label_matrix_dir = Path(label_matrix_dir)
+            lm_path = label_matrix_dir / "label_matrix.npy"
+            lm_ids_path = label_matrix_dir / "protein_ids.npy"
 
-            label_matrix = np.load(
-                label_matrix_dir / "label_matrix.npy", allow_pickle=True
+            if not lm_path.exists():
+                raise FileNotFoundError(
+                    f"Label matrix not found at {lm_path}. "
+                    "Run scripts/preprocess.py first."
+                )
+
+            label_matrix = np.load(lm_path)
+            label_ids = np.load(lm_ids_path, allow_pickle=True)
+
+            id_to_label_idx = {pid: i for i, pid in enumerate(label_ids)}
+
+            keep_mask = np.array(
+                [pid in id_to_label_idx for pid in self.ids], dtype=bool
             )
-            protein_ids = np.load(
-                label_matrix_dir / "protein_ids.npy", allow_pickle=True
+            kept_label_indices = np.array(
+                [id_to_label_idx[pid] for pid in self.ids if pid in id_to_label_idx]
             )
 
-            # Align embeddings with label matrix rows via EntryID
-            label_df = pd.DataFrame({
-                "EntryID":     protein_ids,
-                "labels_vect": list(label_matrix),
-            })
-            self.df = self.df.merge(label_df, on="EntryID", how="inner")
+            self.embeddings = self.embeddings[keep_mask]
+            self.ids = self.ids[keep_mask]
+            self.labels = torch.from_numpy(label_matrix[kept_label_indices]).float()
+
             logger.info(
-                "Dataset ready: %d proteins (train), %d labels",
-                len(self.df),
-                config.num_labels,
+                "Train dataset: %d samples, embedding dim %d, %d labels",
+                len(self.embeddings),
+                self.embeddings.shape[1],
+                self.labels.shape[1],
             )
-        else:
-            logger.info("Dataset ready: %d proteins (test)", len(self.df))
-
-    # ── Dataset protocol ─────────────────────────────────────────────────────
 
     def __len__(self) -> int:
-        return len(self.df)
+        return len(self.embeddings)
 
     def __getitem__(self, index: int):
-        row = self.df.iloc[index]
-        embed = torch.tensor(row["embed"], dtype=torch.float32)
-
+        embed = self.embeddings[index]
         if self.datatype == "train":
-            targets = torch.tensor(row["labels_vect"], dtype=torch.float32)
-            return embed, targets
-
-        # test: return embedding + protein ID for submission
-        return embed, row["EntryID"]
+            return embed, self.labels[index]
+        return embed, self.ids[index]
