@@ -1,0 +1,7 @@
+{
+  "model_version": "v1",
+  "embedding_dim": 1280,
+  "num_labels": 500,
+  "model_type": "cnn1d",
+  "top_k_default": 10
+}

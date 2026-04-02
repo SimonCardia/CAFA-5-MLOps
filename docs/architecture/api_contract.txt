@@ -1,0 +1,194 @@
+API CONTRACT
+
+Endpoint: GET /health
+
+Response:
+{
+  "status": "ok",
+  "model_loaded": true,
+  "model_version": "v1"
+}
+
+---
+
+Endpoint: POST /predict
+
+Request:
+{
+  "embedding": [float x1280],
+  "top_k": 10
+}
+
+Rules:
+- embedding length must be 1280
+- embedding must be numeric
+- top_k optional
+- default top_k = 10
+
+---
+
+Response:
+{
+  "model_version": "v1",
+  "top_k": 10,
+  "predictions": [
+    {"go_term": "GO:XXXXXXX", "score": 0.81}
+  ]
+}
+
+---
+
+Errors:
+
+400:
+- wrong embedding length
+- invalid datatype
+
+500:
+- model not loaded
+- inference failure
+
+[ARTIFACT CONTRACT 001]
+Serving artifact directory:
+- Host path: ./models/
+- Container path: /app/models/
+
+Serving API must expect:
+- /app/models/best_model.pt
+- /app/models/term_names.npy
+- /app/models/model_meta.json
+
+Constraint:
+- The serving API must never read model artifacts directly from outputs/.
+- outputs/ is reserved for offline pipeline outputs only.
+
+
+[OUTPUT CONTRACT]
+Predict response rules:
+- return Top-k GO term predictions only
+- sort predictions by score descending
+- default top_k = 10
+- do not return the full output vector in the MVP
+
+Example response:
+{
+  "model_version": "v1",
+  "top_k": 10,
+  "predictions": [
+    {"go_term": "GO:0003674", "score": 0.81},
+    {"go_term": "GO:0008150", "score": 0.73}
+  ]
+}
+
+
+[INPUT CONTRACT]
+Predict request rules:
+- request must contain exactly one embedding
+- embedding must be a numeric list
+- embedding length must be exactly 1280
+- values are cast internally to float32
+- input is reshaped internally to (1, 1280)
+- batch requests are not supported in the MVP
+
+Example request:
+{
+  "embedding": [0.12, -0.03, 0.77, ...],
+  "top_k": 10
+}
+
+
+[ERROR CONTRACT]
+HTTP 400:
+- missing embedding
+- invalid embedding datatype
+- invalid embedding length
+- invalid top_k
+
+HTTP 500:
+- model not loaded
+- required model artifacts missing
+- inference failure
+
+Example 400 response:
+{
+  "detail": "embedding must have length 1280"
+}
+
+Example 500 response:
+{
+  "detail": "model artifacts could not be loaded"
+}
+
+
+[MODEL LOADING CONTRACT]
+Startup behavior:
+- model is loaded at API startup
+- serving artifacts are read only from /app/models
+
+Health response must indicate:
+- API status
+- whether the model is loaded
+- model version if available
+
+Example /health response:
+{
+  "status": "ok",
+  "model_loaded": true,
+  "model_version": "v1"
+}
+
+If the model is not loaded:
+- /health still responds
+- /predict returns HTTP 500
+
+
+[MLFLOW CONTRACT]
+MLflow behavior:
+- the API attempts to log inference metadata to MLflow
+- MLflow logging must not block or break prediction responses
+- the response format is independent of MLflow availability
+
+MVP logging fields:
+- model_version
+- top_k
+- runtime
+- prediction_count
+- optional request_id
+
+
+[SECURITY CONTRACT]
+Security rules:
+- /predict requires Basic Auth through Nginx
+- /health remains open for status checks
+- authentication is handled outside the API application
+- unauthorized requests to /predict must be rejected before reaching the API
+
+
+[DVC / ARTIFACT CONTRACT]
+Serving artifact source:
+- host path: ./models
+- container path: /app/models
+
+Artifact delivery flow:
+- repository is cloned on the server
+- model artifacts are retrieved via dvc pull
+- docker compose starts the serving stack
+- the API reads only from /app/models
+
+The API must never trigger DVC commands during inference.
+
+
+[HEALTH CONTRACT]
+GET /health
+- no authentication required
+- returns service status
+- returns whether the model is loaded
+- may return model_version
+
+Example:
+{
+  "status": "ok",
+  "model_loaded": true,
+  "model_version": "v1"
+}
+

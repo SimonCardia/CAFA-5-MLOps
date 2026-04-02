@@ -1,0 +1,499 @@
+CAFA-5 Serving – Final Decisions (Sprint 0)
+
+Model Interface:
+- Input: embedding only (no raw sequence)
+- Embedding dimension: 1280
+- Input dtype: float32 (cast internally)
+- Input shape: (1280,)
+- Internal shape: (1, 1280)
+- No batch support in MVP
+
+API:
+- Endpoints:
+  - GET /health
+  - POST /predict
+- One embedding per request
+- top_k default: 10
+
+Output:
+- Top-k GO terms only
+- Sorted descending by score
+- Sigmoid applied if needed
+
+Model Artifacts:
+- best_model.pt
+- term_names.npy
+- model_meta.json (mandatory)
+
+Model Loading:
+- Load at API startup (not lazy)
+
+Security:
+- Nginx Basic Auth
+- /predict protected
+- /health open
+
+MLflow:
+- Logging enabled
+- Non-blocking
+- Logs: model_version, runtime, top_k
+
+Storage:
+- Model NOT in Docker image
+- Mounted via volume
+- Path in container: /app/models
+
+Serving:
+- CPU only
+- No batching
+
+[STRUCTURE DECISION 001]
+Date: 2026-04-02
+
+Decision:
+- outputs/ remains the experimental artifact area of the offline runner pipeline.
+- models/ becomes the stable handover directory for serving artifacts.
+- The future inference API will read only from models/, never directly from outputs/.
+
+Reason:
+- outputs/ may contain intermediate, experimental, and runner-specific artifacts.
+- models/ is intended to hold only serving-relevant artifacts in a stable layout.
+- This cleanly separates offline experimentation from online serving.
+
+Current status:
+- models/ exists but is not yet fully populated.
+- model_meta.json may exist before the final model artifacts are copied.
+- best_model.pt and term_names.npy will only be copied after embedding/training work is finished.
+
+
+[STRUCTURE DECISION 002]
+Date: 2026-04-02
+
+Decision:
+- The models/ directory may be prepared early.
+- Actual serving artifacts will only be copied into models/ after the current embedding/training tasks are complete.
+
+Reason:
+- Avoid interfering with the currently running offline pipeline.
+- Prevent copying incomplete or outdated artifacts into the serving handover directory.
+
+Current expected final contents of models/:
+- best_model.pt
+- term_names.npy
+- model_meta.json
+
+Current actual contents:
+- model_meta.json only
+
+
+[ARTIFACT DECISION 003]
+Date: 2026-04-02
+
+Decision:
+The serving MVP requires exactly these model artifacts:
+- best_model.pt
+- term_names.npy
+- model_meta.json
+
+Not required for the serving MVP:
+- label_matrix.npy
+- protein_ids.npy
+- split_meta.json
+- train_ids.npy
+- holdout_ids.npy
+
+Reason:
+The serving API only performs downstream inference on a ready-made embedding.
+It does not need training data, split metadata, or label matrix artifacts.
+
+
+[API OUTPUT DECISION 004]
+Date: 2026-04-02
+
+Decision:
+The serving API returns only Top-k predictions, not the full output vector.
+
+Output rules:
+- predictions are sorted in descending order by score
+- default top_k = 10
+- top_k is configurable per request
+- the full 500-label output is not returned in the MVP
+
+Reason:
+Returning only Top-k predictions keeps the API simple, compact, and practical.
+It reduces payload size and avoids exposing unnecessary output details in the MVP.
+
+
+[API INPUT DECISION 005]
+Date: 2026-04-02
+
+Decision:
+The serving API accepts exactly one embedding per request.
+
+Input rules:
+- one embedding only
+- embedding length must be exactly 1280
+- input is accepted as a 1-dimensional list
+- input values are cast internally to float32
+- input is reshaped internally to (1, 1280)
+- batch input is not supported in the MVP
+
+Reason:
+This is the simplest valid interface for serving.
+It keeps the API small, avoids unnecessary batch complexity, and matches the trained model expectations.
+
+
+[ERROR HANDLING DECISION 006]
+Date: 2026-04-02
+
+Decision:
+The serving API uses a simple HTTP error model.
+
+HTTP 400:
+- missing embedding
+- invalid embedding datatype
+- invalid embedding length
+- invalid top_k value
+
+HTTP 500:
+- model not loaded
+- required model artifacts missing
+- internal inference failure
+
+Reason:
+This keeps the API behavior simple, predictable, and easy to test in the MVP.
+
+
+[MODEL LOADING DECISION 007]
+Date: 2026-04-02
+
+Decision:
+The serving API loads the model at startup, not lazily on the first request.
+
+Rules:
+- the API attempts to load model artifacts during startup
+- /health must report whether the model is loaded
+- /predict must fail with HTTP 500 if the model is not available
+- the API reads serving artifacts only from /app/models
+
+Reason:
+Startup loading makes failures visible early, avoids first-request latency, and provides predictable runtime behavior.
+
+
+[MLFLOW DECISION 008]
+Date: 2026-04-02
+
+Decision:
+MLflow is used as a tracking service for inference metadata only.
+
+Rules:
+- MLflow is not part of the critical request path
+- logging must be best effort
+- logging failure must not break inference
+- the API sends metadata to MLflow after or alongside prediction handling
+
+Logged fields in the MVP:
+- model_version
+- top_k
+- inference runtime
+- number of returned predictions
+- optional request_id if available
+
+Not logged in the MVP:
+- full embedding vector
+- full 500-label output vector
+
+Reason:
+This keeps inference stable while still providing traceability and experiment visibility.
+
+
+[SECURITY DECISION 009]
+Date: 2026-04-02
+
+Decision:
+The MVP uses Nginx Basic Auth as the first security layer.
+
+Rules:
+- /predict is protected by username/password authentication
+- /health remains publicly reachable
+- credentials are managed via an .htpasswd file
+- authentication is enforced by Nginx, not by the FastAPI application itself
+
+Reason:
+This is the simplest clean separation between access control and inference logic.
+It protects the prediction endpoint without adding authentication complexity to the API code.
+
+
+[OFFLINE GPU DECISION 010]
+Date: 2026-04-02
+
+Decision:
+The offline runner stack uses the AMD ROCm container if needed for embedding generation and training on the local workstation.
+
+Rules:
+- embedding generation is performed through cafa5-amd
+- training remains part of the offline runner workflow
+- the production serving stack does not depend on GPU execution
+
+Reason:
+This keeps heavy GPU workloads in the offline pipeline while the serving MVP remains simpler and CPU-oriented.
+
+
+[AMD GPU DECISION 012]
+Date: 2026-04-02
+
+Decision:
+The offline AMD ROCm runner is validated on the local workstation with the following runtime environment:
+
+- HSA_OVERRIDE_GFX_VERSION=12.0.0
+- HIP_VISIBLE_DEVICES=0
+- ROCR_VISIBLE_DEVICES=0
+
+Validated result:
+- torch.cuda.is_available() == True
+- device_count == 1
+- detected device: AMD Radeon RX 9060 XT
+
+Implication:
+- The AMD ROCm path is confirmed as valid for offline embedding generation and training.
+- This remains separate from the serving MVP, which stays CPU-oriented.
+
+
+[SERVICE STRUCTURE DECISION 013]
+Date: 2026-04-02
+
+Decision:
+The serving MVP consists of exactly three production services:
+
+- nginx
+- cafa-api
+- mlflow
+
+Roles:
+- nginx = reverse proxy + Basic Auth
+- cafa-api = embedding validation + model inference + response generation + MLflow logging
+- mlflow = tracking service
+
+Explicitly excluded from the production serving stack:
+- training
+- preprocessing
+- embedding generation
+- offline evaluation
+
+Reason:
+This keeps the serving MVP small, modular, and easy to operate.
+
+
+[DVC DECISION 014]
+Date: 2026-04-02
+
+Decision:
+DVC is used only for model artifact delivery during deployment or update.
+
+Rules:
+- DVC is not part of the request path
+- DVC is not called by the API during inference
+- the server-side artifact flow is:
+  git clone -> dvc pull -> docker compose up
+- serving artifacts are placed in ./models on the host
+- the API reads them from /app/models inside the container
+
+Reason:
+DVC is used as an artifact management layer, not as a runtime dependency.
+This keeps inference simple, fast, and operationally stable.
+
+
+[SERVING RUNTIME DECISION 015]
+Date: 2026-04-02
+
+Decision:
+The serving MVP runs on CPU only.
+
+Rules:
+- GPU is not required for the MVP serving stack
+- offline runner may use AMD ROCm for training and embedding generation
+- the serving API must remain deployable on a standard CPU server
+
+Reason:
+This simplifies deployment, reduces infrastructure complexity, and is sufficient for embedding-to-prediction inference in the MVP.
+
+
+[HEALTH ENDPOINT DECISION 016]
+Date: 2026-04-02
+
+Decision:
+The /health endpoint remains publicly reachable and is used for service status checks.
+
+Rules:
+- /health does not require Basic Auth
+- /health returns API status
+- /health reports whether the model is loaded
+- /health may include model_version if available
+
+Reason:
+This supports simple debugging, health checks, and future monitoring.
+
+
+[SPRINT 0 DONE CRITERIA]
+Date: 2026-04-02
+
+Sprint 0 is complete when:
+- the API contract is frozen
+- the artifact contract is frozen
+- the service structure is frozen
+- the security boundary is frozen
+- the DVC delivery flow is frozen
+- the team split is frozen
+- no unresolved architecture questions remain for the MVP
+
+
+[MVP ACCEPTANCE CHECKLIST]
+Date: 2026-04-02
+
+The MVP is considered complete when all of the following are true:
+
+- /health is reachable
+- /predict is reachable through Nginx
+- /predict is protected by Basic Auth
+- the API loads model artifacts from /app/models
+- the API accepts exactly one embedding of length 1280
+- the API converts input to float32 and reshapes it to (1, 1280)
+- the API returns Top-k GO term predictions sorted by score
+- MLflow logging works in best-effort mode
+- model artifacts are delivered through DVC and mounted from ./models
+- the serving stack contains exactly nginx, cafa-api, and mlflow
+- no offline runner component is required at request time
+
+
+[SPRINT 1 LOCAL ARTIFACT DECISION]
+Date: 2026-04-02
+
+Decision:
+For Sprint 1 local inference validation, artifact paths are temporarily:
+
+- model: outputs/checkpoints/best_model.pt
+- term names: outputs/label_matrix_top500/term_names.npy
+- metadata: models/model_meta.json
+
+Reason:
+- models/ is not yet fully populated because offline embedding/training work is still running.
+- Sprint 1 focuses on local inference logic first.
+- The serving handover to models/ remains the later stable target.
+
+
+[SPRINT 1 RESULT]
+Date: 2026-04-02
+
+Result:
+The local inference core is validated.
+
+Validated behavior:
+- best_model.pt loads successfully
+- term_names.npy loads successfully
+- model_meta.json is used successfully
+- one embedding of length 1280 is accepted
+- the embedding is reshaped internally to (1, 1280)
+- Top-k GO term predictions are returned
+
+Implication:
+Sprint 1 core logic is confirmed and can now be wrapped in an API layer.
+
+
+[SPRINT 2 RESULT]
+Date: 2026-04-02
+
+Result:
+The FastAPI serving layer is validated locally.
+
+Validated behavior:
+- the API starts successfully with uvicorn
+- GET /health returns HTTP 200
+- POST /predict returns HTTP 200
+- the API uses the validated local inference core successfully
+
+Implication:
+Sprint 2 is complete at the local API level.
+The next step is to containerize the serving API.
+
+
+[SERVING HANDOVER RESULT]
+Date: 2026-04-02
+
+Result:
+The serving artifact handover directory models/ is now populated with the required MVP artifacts:
+- best_model.pt
+- term_names.npy
+- model_meta.json
+
+Implication:
+The serving API can now use models/ as the stable artifact source instead of outputs/.
+
+
+[SERVING HANDOVER RESULT]
+Date: 2026-04-02
+
+Result:
+The serving artifact handover directory models/ is populated with:
+- best_model.pt
+- term_names.npy
+- model_meta.json
+
+Implication:
+The serving API will now use models/ as its stable artifact source.
+
+
+[SPRINT 3 RESULT]
+Date: 2026-04-02
+
+Result:
+The serving API is successfully containerized.
+
+Validated behavior:
+- Dockerfile.api builds successfully
+- the API starts inside its own container
+- /health works through the container
+- /predict works through the container
+- the API reads serving artifacts from /app/models
+
+Implication:
+Sprint 3 is complete.
+The next step is Sprint 4 = MLflow integration.
+
+
+[MLFLOW IMPLEMENTATION DECISION 017]
+Date: 2026-04-02
+
+Decision:
+MLflow is integrated as a separate service in the serving stack.
+
+Rules:
+- the API logs inference metadata to MLflow
+- logging remains best effort
+- MLflow failure must not break prediction responses
+- the API logs only lightweight metadata in the MVP
+
+Logged fields:
+- model_version
+- top_k
+- runtime_ms
+- prediction_count
+- optional request_id
+
+
+[SPRINT 4 RESULT]
+Date: 2026-04-02
+
+Result:
+MLflow is successfully integrated into the serving stack.
+
+Validated behavior:
+- mlflow service starts successfully
+- the API starts with an MLflow tracking URI
+- /predict still works with MLflow enabled
+- MLflow is reachable as a separate service
+- inference continues to work while MLflow remains outside the critical request path
+
+Implication:
+Sprint 4 is complete.
+The next step is Sprint 5 = Nginx + Basic Auth.
+

@@ -1,202 +1,196 @@
-# CAFA-5 Protein Function Prediction
+# CAFA-5 Protein Function Prediction — MLOps Serving System
 
-Production-ready ML pipeline for the [Kaggle CAFA-5 Protein Function Prediction competition](https://www.kaggle.com/competitions/cafa-5-protein-function-prediction), predicting Gene Ontology (GO) terms from protein language model embeddings (ESM-2, ProtBERT, T5).
+## Overview
+
+This project implements a bioinformatics inference system for protein function prediction (CAFA-5 context), built with a clean MLOps architecture.
+
+The system separates:
+- Offline pipeline (embedding, training, evaluation)
+- Online serving (API-based inference)
+
+Focus:
+- reproducibility
+- modularity
+- deployability
+
+---
+
+## Architecture
+
+### Serving Stack (MVP)
+
+- cafa-api (FastAPI)
+  - validates input embeddings
+  - loads trained model
+  - performs inference
+  - logs metadata to MLflow
+
+- mlflow
+  - tracks inference metadata
+  - enables experiment comparison
+
+- (next step) nginx
+  - reverse proxy
+  - authentication layer
+
+---
+
+### Offline Pipeline
+
+Executed locally / on GPU:
+
+- scripts/preprocess.py
+- scripts/split_train_holdout.py
+- scripts/embed_sequences.py
+- scripts/train.py
+- scripts/evaluate_holdout.py
+
+GPU (ROCm) is used for:
+- embedding generation
+- training
+
+---
 
 ## Project Structure
 
-```
-CAFA-5-Protein-Function-Prediction-MLOps/
-├── configs/
-│   └── config.yaml                # All hyperparams, paths, model selection
-├── src/
-│   ├── __init__.py
-│   ├── config.py                  # YAML config loading + dataclass validation
-│   ├── data/
-│   │   ├── __init__.py
-│   │   ├── dataset.py             # ProteinSequenceDataset (PyTorch Dataset)
-│   │   └── preprocessing.py       # Build binary label matrix from train_terms.tsv
-│   ├── models/
-│   │   ├── __init__.py            # Factory function build_model()
-│   │   ├── mlp.py                 # MultiLayerPerceptron
-│   │   └── cnn1d.py               # CNN1D
-│   ├── training/
-│   │   ├── __init__.py
-│   │   └── trainer.py             # Training loop, validation, checkpointing
-│   ├── inference/
-│   │   ├── __init__.py
-│   │   └── predictor.py           # Load model + generate submission
-│   └── utils.py                   # Seed setting, logging setup, device selection
-├── scripts/
-│   ├── train.py                   # CLI: python scripts/train.py --config configs/config.yaml
-│   ├── predict.py                 # CLI: python scripts/predict.py --config configs/config.yaml
-│   └── preprocess.py              # CLI: generate label matrix from raw data
-├── data/                          # .gitignored; user places data here
-├── outputs/                       # .gitignored; checkpoints, logs, submissions
-├── notebooks/
-│   └── CAFA5-EMS2embeds-Pytorch.ipynb   # Archived original notebook
-├── requirements.txt
-├── pyproject.toml
-├── .gitignore
-└── README.md
-```
+src/                 core ML logic  
+services/            API + service logic  
+scripts/             pipeline scripts  
+configs/             configuration  
+data/                raw + processed data  
+outputs/             experimental artifacts  
+models/              serving artifacts (stable)  
+docs/architecture/   decisions + tasks  
 
-## Background
+---
 
-The Gene Ontology (GO) is a concept hierarchy describing biological function of genes and gene products at different levels of abstraction. This project frames GO term prediction as a **multi-label classification** problem: given a protein embedding, predict which of the top-N GO terms apply.
+## Artifact Strategy
 
-## Setup
+outputs/ = experimental artifacts (training pipeline)  
+models/ = production-ready artifacts (serving)
 
-### 1. Create environment
+The serving API reads **only from models/**.
 
-```bash
-python -m venv .venv
-source .venv/bin/activate   # Linux/macOS
-pip install -r requirements.txt
-```
+Required files:
 
-Note: embedding generation can be memory-intensive (especially `prot_t5` / ProtT5-XL). Use a CUDA GPU and keep `embedding.fp16=true` for faster embedding on GPU.
+models/
+- best_model.pt
+- term_names.npy
+- model_meta.json
 
-### 2. Place data
-Download CAFA-5 data from the [Kaggle competition page](https://www.kaggle.com/competitions/cafa-5-protein-function-prediction/data).
+---
 
-You can either:
-- use precomputed embeddings (from Kaggle), or
-- generate embeddings directly from `Train/train_sequences.fasta` with `scripts/embed_sequences.py`.
+## Running the System
 
-Then organize under `data/`:
+### Build
 
-```
-data/
-├── cafa-5-protein-function-prediction/
-│   └── Train/
-│       ├── train_terms.tsv
-│       ├── train_sequences.fasta
-│       └── ...
-├── embeddings/                           # configured by `data.embeddings_dir`
-│   ├── hf_esm2/
-│   │   ├── train_embeddings.npy
-│   │   ├── train_ids.npy
-│   │   ├── holdout_embeddings.npy
-│   │   └── holdout_ids.npy
-│   ├── hf_protbert/
-│   └── hf_prot_t5/
-└── ...
-```
+docker compose -f compose.api.yml build
 
-### 3. Configure
+### Start
 
-Edit `configs/config.yaml` to adjust paths, model type, hyperparameters, and embedding source.
+docker compose -f compose.api.yml up
 
-## Usage
+---
 
-### Preprocess labels 
+## API Endpoints
 
-```bash
-python scripts/preprocess.py --config configs/config.yaml
-```
+### Health
 
-Generates a binary label matrix (`.npy`) under `outputs/`.
+GET /health
 
-### Split train/holdout
-```bash
-python scripts/split_train_holdout.py --config configs/config.yaml
-```
+Example response:
 
-### Generate embeddings (train split)
-```bash
-python scripts/embed_sequences.py --config configs/config.yaml \
-  --ids-npy outputs/splits/train_ids.npy \
-  --split train
-```
+{
+  "status": "ok",
+  "model_loaded": true,
+  "model_version": "v1"
+}
 
-### Generate embeddings (holdout split)
-```bash
-python scripts/embed_sequences.py --config configs/config.yaml \
-  --ids-npy outputs/splits/holdout_ids.npy \
-  --split holdout
-```
+---
 
-## Generate embedding Test
-```bash
-python scripts/embed_sequences.py --config configs/config.yaml \
-  --ids-npy outputs/splits/test_ids.npy \
-  --split test
-```
+### Prediction
 
-### (Optional) Evaluate holdout
-```bash
-python scripts/evaluate_holdout.py --config configs/config.yaml
-```
+POST /predict
 
-### Train
+Request:
 
-```bash
-python scripts/train.py --config configs/config.yaml
-```
+{
+  "embedding": [...1280 values...],
+  "top_k": 5
+}
 
-Trains the model, saves the best checkpoint (by val F1) to `outputs/checkpoints/best_model.pt`, and writes `outputs/training_history.json`.
+Response:
 
-### Predict
+{
+  "model_version": "v1",
+  "top_k": 5,
+  "predictions": [
+    {"go_term": "...", "score": 0.81}
+  ]
+}
 
-```bash
-python scripts/predict.py --config configs/config.yaml [--checkpoint path/to/model.pt]
-```
+---
 
-Produces `outputs/submission.tsv` in CAFA-5 format (Id, GO term, Confidence).
+## MLflow
 
-## Configuration
+MLflow runs as a separate service:
 
-All parameters live in `configs/config.yaml`:
+http://localhost:5000
 
-```yaml
-data:
-  data_dir: "data/cafa-5-protein-function-prediction"
-  train_fasta: "data/cafa-5-protein-function-prediction/Train/train_sequences.fasta"
-  embeddings_dir: "data/embeddings"
-  embeddings_source: "ESM2"        # ESM2 | ProtBERT | T5
-  num_labels: 500
-  train_val_split: 0.9
-  holdout_fraction: 0.1
-  splits_dir: "outputs/splits"
+Logged metadata:
+- model_version
+- top_k
+- runtime_ms
+- prediction_count
 
-embedding:
-  backend: "esm2"                  # esm2 | prot_bert | prot_t5
-  hf_cache_dir: "data/hf_cache"
-  pooling: "mean"                  # mean | cls
-  max_length: 1280
-  batch_size: 8
-  fp16: true
-  num_workers: 0
-  generated_subdir_prefix: "hf_"
+Logging is best effort and does not affect API responses.
 
-model:
-  type: "mlp"                      # mlp | cnn1d
-  mlp_hidden_dims: [864, 712]
-  cnn_out_channels: [3, 8]
-  cnn_kernel_size: 3
+---
 
-training:
-  epochs: 5
-  batch_size: 128
-  learning_rate: 0.001
-  scheduler_factor: 0.1
-  scheduler_patience: 1
-  seed: 42
+## Current Status
 
-prediction:
-  datatype: "holdout"
+Completed:
+- FastAPI inference service
+- Dockerized API
+- MLflow integration
+- Microservice architecture (API + MLflow)
 
-output:
-  output_dir: "outputs"
-```
+In progress:
+- DVC-based model versioning
+- Nginx + authentication
+- production hardening
 
-## Models
+---
 
-- **MLP** (`mlp`): Configurable hidden-layer sizes, ReLU activations.
-- **CNN1D** (`cnn1d`): Two 1-D conv layers with tanh activations, max pooling, and fully-connected output.
+## Key Design Decisions
 
-Both output raw logits (no final sigmoid) — `BCEWithLogitsLoss` handles the sigmoid internally for numerical stability.
+- training is separated from serving
+- models are NOT stored in Docker images
+- MLflow is NOT part of the request path
+- API is stateless and lightweight
+- GPU is only used in offline pipeline
 
-## License
+---
 
-MIT
+## Tech Stack
+
+- Python
+- PyTorch (ROCm)
+- FastAPI
+- Docker / Docker Compose
+- MLflow
+
+---
+
+## Next Steps
+
+- add Nginx reverse proxy
+- implement Basic Auth
+- integrate DVC artifact flow
+- add monitoring
+
+---
+
+## Notes
+
+This project focuses on building a clean, minimal, and production-oriented bioinformatics service.

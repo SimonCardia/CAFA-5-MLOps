@@ -1,0 +1,257 @@
+TEAM SPLIT
+
+---------------------------------------------------------------
+>>suggestion<<
+Person A – API / Model
+- FastAPI app
+- Schemas
+- Model loading
+- Prediction logic
+- MLflow logging
+
+Person B – Infra / Deployment
+- Dockerfile.api
+- docker-compose.server.yml
+- nginx.conf
+- Basic Auth
+- DVC model flow
+
+Shared:
+- API contract
+- model artifacts
+- testing
+------------------------------------------------------------------
+
+[HANDOVER STEP FOR LATER]
+After the current embedding/training work is complete, the serving artifacts will be copied from outputs/ to models/ using:
+
+cp outputs/checkpoints/best_model.pt models/
+cp outputs/label_matrix_top500/term_names.npy models/
+
+The models/ directory is the serving handover layer.
+The API must read only from models/, never directly from outputs/.
+
+
+[IMPLEMENTATION TASK]
+Prediction service must:
+- apply sigmoid if model outputs logits
+- map output indices to GO terms via term_names.npy
+- sort predictions by score descending
+- return only Top-k results
+
+
+[IMPLEMENTATION TASK]
+Input validation must:
+- require exactly one embedding
+- verify embedding length == 1280
+- reject non-numeric values
+- cast values to float32
+- reshape input to (1, 1280) before inference
+- reject batch input in the MVP
+
+
+[IMPLEMENTATION TASK]
+API error handling must:
+- return HTTP 400 for invalid client input
+- return HTTP 500 for model loading or inference failures
+- use clear and short error messages
+- keep health endpoint behavior separate from predict endpoint behavior
+
+
+[IMPLEMENTATION TASK]
+Model loading must:
+- happen at API startup
+- read artifacts only from /app/models
+- expose model_loaded status to /health
+- expose model_version if available
+- prevent successful /predict execution when the model is unavailable
+
+
+[IMPLEMENTATION TASK]
+MLflow integration must:
+- log inference metadata only
+- be best effort / non-blocking
+- not prevent successful API responses if MLflow is unavailable
+- log model_version, top_k, runtime, and prediction_count
+- optionally log request_id if present
+
+
+[IMPLEMENTATION TASK]
+Security layer must:
+- use Nginx Basic Auth
+- protect /predict
+- leave /health open
+- store credentials in an .htpasswd file
+- enforce authentication in Nginx, not in FastAPI code
+
+
+[OFFLINE GPU VALIDATION RESULT]
+AMD ROCm offline runner is validated with:
+- HSA_OVERRIDE_GFX_VERSION=12.0.0
+- HIP_VISIBLE_DEVICES=0
+- ROCR_VISIBLE_DEVICES=0
+
+Use this environment for:
+- embed_sequences.py
+- train.py
+- evaluate_holdout.py
+
+This configuration belongs to the offline runner stack, not to the serving MVP.
+
+
+[IMPLEMENTATION TASK]
+Serving stack must contain exactly these services:
+- nginx
+- cafa-api
+- mlflow
+
+Offline runner tasks remain outside the production stack.
+
+
+[IMPLEMENTATION TASK]
+DVC / artifact delivery must:
+- keep model artifacts outside Docker images
+- use ./models on the host as the serving handover directory
+- mount ./models into the API container as /app/models
+- ensure the API never depends on dvc pull at request time
+
+
+[TEAM SPLIT]
+Person A – API / Model
+- FastAPI app
+- Schemas
+- Model loading
+- Prediction logic
+- MLflow logging
+
+Person B – Infra / Deployment
+- Dockerfile.api
+- compose.server.yml
+- nginx.conf
+- Basic Auth
+- DVC artifact flow
+
+Shared:
+- API contract
+- model artifact contract
+- integration testing
+- MVP acceptance checks
+
+
+[SPRINT 1 ENTRY CONDITION]
+Sprint 1 may begin when:
+- architecture decisions are frozen
+- API contract is frozen
+- artifact contract is frozen
+- team split is frozen
+- MVP acceptance criteria are documented
+
+
+[SPRINT 1 LOCAL TEST]
+Local inference test script:
+- services/inference-api/local_test.py
+
+Expected result:
+- model loads
+- term_names loads
+- random embedding of length 1280 is accepted
+- Top-k predictions are returned
+
+
+[SPRINT 1 NOTE]
+The inference service must construct the serving model using the actual constructor signatures from src/models:
+- CNN1D(..., num_classes=...)
+- MultiLayerPerceptron(..., num_classes=...)
+
+The local inference core must follow the offline model implementation exactly.
+
+
+[SPRINT 1 DONE]
+Validated:
+- local model loading
+- local term name loading
+- local embedding validation
+- local Top-k prediction generation
+
+Next step:
+Sprint 2 = FastAPI layer
+
+
+[SPRINT 2 START]
+Goal:
+- wrap the validated local inference core in a FastAPI application
+- implement GET /health
+- implement POST /predict
+- test locally with uvicorn
+
+Excluded from Sprint 2:
+- Nginx
+- MLflow
+- Dockerfile.api
+- compose.server.yml
+
+
+[SPRINT 2 DONE]
+Validated:
+- FastAPI application starts locally
+- /health works
+- /predict works
+- local inference core is successfully wrapped by the API
+
+Next step:
+Sprint 3 = API containerization
+
+
+[SPRINT 3 START]
+Goal:
+- build a dedicated API image
+- run the serving API inside its own container
+- use models/ as the stable artifact source
+
+Excluded from Sprint 3:
+- nginx
+- mlflow
+- dvc runtime integration
+
+
+[SPRINT 3 NOTE]
+The serving API image requires src/ and services/inference-api/ inside the Docker build context.
+The previous dev-oriented .dockerignore excluded these paths and broke Dockerfile.api.
+For the serving image build, .dockerignore was adjusted to keep serving source code available.
+
+
+[SPRINT 3 DONE]
+Validated:
+- dedicated API image
+- containerized API startup
+- /health works in container
+- /predict works in container
+- stable serving artifacts loaded from models/
+
+Next step:
+Sprint 4 = MLflow integration
+
+
+[SPRINT 4 START]
+Goal:
+- add MLflow as a separate tracking service
+- log inference metadata from the API
+- keep logging best effort and non-blocking from an API perspective
+
+Excluded from Sprint 4:
+- nginx
+- Basic Auth
+- DVC deployment automation
+
+
+[SPRINT 4 DONE]
+Validated:
+- mlflow service in the serving stack
+- API runs with MLflow enabled
+- /predict still works
+- logging integration does not block inference
+- MLflow is reachable separately
+
+Next step:
+Sprint 5 = Nginx + Basic Auth
+

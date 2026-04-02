@@ -43,8 +43,7 @@ def build_label_matrix(config: Config) -> tuple[np.ndarray, np.ndarray, np.ndarr
     term_names: np.ndarray = top_terms.index.values
 
     df_filtered = df[df["term"].isin(term_names)]
-    protein_ids = df_filtered["EntryID"].unique()
-    protein_ids.sort()
+    protein_ids = np.array(sorted(df_filtered["EntryID"].astype(str).unique().tolist()))
 
     pid_to_idx = {pid: i for i, pid in enumerate(protein_ids)}
     term_to_idx = {t: i for i, t in enumerate(term_names)}

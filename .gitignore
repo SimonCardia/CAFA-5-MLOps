@@ -1,38 +1,69 @@
-# Data files
-data/
-docs/
-outputs/
-!outputs/checkpoints/
-
+# ------------------------
 # Python
+# ------------------------
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
-*.egg-info/
-dist/
-build/
-.eggs/
+*.pyd
+*.so
 
-# Jupyter
-.ipynb_checkpoints/
-
-# Precomputed arrays
-*.npy
-
-# Environment
-.env
+# Virtual environments
 .venv/
 venv/
 env/
-.cafa5/
 
-# IDE
+# ------------------------
+# Jupyter
+# ------------------------
+.ipynb_checkpoints/
+
+# ------------------------
+# OS / Editor
+# ------------------------
+.DS_Store
+Thumbs.db
 .vscode/
 .idea/
 
-# OS
-.DS_Store
-Thumbs.db
+# ------------------------
+# Data & Artifacts (CRITICAL)
+# ------------------------
+data/
+outputs/
+mlruns/
 
-# Paper / presentation notes (kept local, not synced)
+# ------------------------
+# DVC (future)
+# ------------------------
+.dvc/cache/
+
+# ------------------------
+# Logs
+# ------------------------
+*.log
+
+# ------------------------
+# Build / temp
+# ------------------------
+build/
+dist/
+*.egg-info/
+
+# ------------------------
+# Docker
+# ------------------------
+*.tar
+
+# ------------------------
+# Optional local notes
+# ------------------------
 notes/
+.aider*
+
+# ------------------------
+# IMPORTANT
+# ------------------------
+# models/ must NOT be ignored
+# docs/ must NOT be ignored
+# *.npy must NOT be globally ignored (serving artifacts)
+*.swp
